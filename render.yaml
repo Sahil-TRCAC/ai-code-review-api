@@ -12,29 +12,11 @@ services:
         value: false
       - key: DATABASE_URL
         sync: false
-      - key: REDIS_URL
+      - key: GROQ_API_KEY
         sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
       - key: LLM_PROVIDER
-        value: anthropic
+        value: groq
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
-
-  - type: worker
-    name: celery-worker
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A config worker -l info
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: REDIS_URL
-        sync: false
-      - key: SECRET_KEY
-        generateValue: true
-
-  redis:
-    plan: starter
