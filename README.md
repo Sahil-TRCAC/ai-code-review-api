@@ -139,6 +139,24 @@ Configure in GitHub repo settings:
 
 ---
 
+## Testing
+
+The project includes automated pytest test suites covering:
+
+* User registration and JWT authentication
+* Profile access and authorization
+* Code review submission workflows
+* Review retrieval and pagination
+* Daily rate-limiting enforcement (429 responses)
+* Staff-only admin endpoint access control
+
+Run tests:
+
+```bash
+pytest
+```
+
+
 ## License
 
 MIT
