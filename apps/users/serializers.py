@@ -34,11 +34,19 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class GitHubTokenSerializer(serializers.ModelSerializer):
+    github_token = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
+
     class Meta:
         model = User
         fields = ['github_token']
 
     def update(self, instance, validated_data):
-        instance.github_token = validated_data.get('github_token', instance.github_token)
-        instance.save()
+        if 'github_token' in validated_data:
+            instance.github_token = validated_data['github_token']
+            instance.save()
         return instance

@@ -103,28 +103,38 @@ REST_FRAMEWORK = {
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_ACCESS_TOKEN_LIFETIME', 60))),
     'REFRESH_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('JWT_REFRESH_TOKEN_LIFETIME', 1440))),
-    'ROTATE_REFRESH_TOKENS': True,
-    'BLACKLIST_AFTER_ROTATION': True,
+    # Rotation stores used refresh tokens in the simplejwt blacklist app.
+    # That app is not installed, so refresh returns a new access token only.
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
 
-CELERY_BROKER_URL = 'redis://192.168.52.89:6379/0'
-CELERY_RESULT_BACKEND = 'redis://192.168.52.89:6379/0'
-CELERY_BROKER_TRANSPORT = 'redis'
+def _env_flag(name, default='false'):
+    return os.getenv(name, default).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', REDIS_URL)
+CELERY_BROKER_TRANSPORT = os.getenv('CELERY_BROKER_TRANSPORT', 'redis')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TASK_ALWAYS_EAGER = True
-CELERY_ALWAYS_EAGER = True
-CELERY_EAGER_PROPAGATES_EXCEPTIONS = True
+# Inline execution only when a test run sets this explicitly. Real workers stay async.
+CELERY_TASK_ALWAYS_EAGER = _env_flag('CELERY_TASK_ALWAYS_EAGER', 'false')
+CELERY_TASK_EAGER_PROPAGATES = _env_flag(
+    'CELERY_TASK_EAGER_PROPAGATES',
+    'true' if CELERY_TASK_ALWAYS_EAGER else 'false',
+)
 
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
-GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-20b')
 LLM_PROVIDER = os.getenv('LLM_PROVIDER', 'groq')
 
 DAILY_REVIEW_LIMIT = int(os.getenv('DAILY_REVIEW_LIMIT', 10))

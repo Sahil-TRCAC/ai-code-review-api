@@ -18,13 +18,15 @@ class User(AbstractUser):
         db_table = 'users'
 
     def check_and_increment_review_count(self):
+        from django.conf import settings
+
         now = timezone.now()
         if now >= self.daily_review_reset:
             self.daily_review_count = 1
             self.daily_review_reset = now.replace(hour=0, minute=0, second=0, microsecond=0) + timezone.timedelta(days=1)
             self.save()
             return True
-        if self.daily_review_count >= 10:
+        if self.daily_review_count >= settings.DAILY_REVIEW_LIMIT:
             return False
         self.daily_review_count += 1
         self.save()

@@ -20,6 +20,7 @@ wheels/
 *.egg
 .env
 .venv
+.pytest_cache/
 env/
 venv/
 ENV/

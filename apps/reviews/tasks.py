@@ -5,6 +5,17 @@ from .models import Review, Bug, SecurityIssue, QualitySuggestion, ReviewStatus
 from .llm_service import LLMService
 
 
+def _retry_still_pending(task):
+    """True when this failure will be attempted again by a worker."""
+    request = task.request
+    if getattr(request, 'called_directly', True):
+        return False
+    max_retries = task.max_retries
+    if max_retries is None:
+        return True
+    return request.retries < max_retries
+
+
 @shared_task(bind=True, max_retries=1)
 def process_review(self, review_id: int):
     try:
@@ -51,5 +62,7 @@ def process_review(self, review_id: int):
         return {'review_id': review_id, 'status': 'completed'}
         
     except Exception as exc:
+        if _retry_still_pending(self):
+            raise self.retry(exc=exc)
         Review.objects.filter(id=review_id).update(status=ReviewStatus.FAILED)
-        raise self.retry(exc=exc)
+        raise

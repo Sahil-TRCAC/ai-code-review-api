@@ -1,34 +1,28 @@
 from django.conf import settings
+from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters
+from rest_framework.filters import OrderingFilter
 
-from .models import Review, ReviewStatus, Bug, SecurityIssue, QualitySuggestion
+from .models import Review, ReviewStatus, Bug
 from .serializers import ReviewCreateSerializer, ReviewSerializer, ReviewListSerializer
-from .llm_service import LLMService
+from .tasks import process_review
 
 
-class RateLimitMixin:
-    def check_rate_limit(self, user):
-        if not user.check_and_increment_review_count():
-            from datetime import timedelta
-            reset_time = user.daily_review_reset
-            remaining = 0
-            return False, reset_time, remaining
-        remaining = user.get_remaining_reviews()
-        reset_time = user.daily_review_reset
-        return True, reset_time, remaining
+def _check_rate_limit(user):
+    if not user.check_and_increment_review_count():
+        return False, user.daily_review_reset, 0
+    return True, user.daily_review_reset, user.get_remaining_reviews()
 
 
 class SubmitReviewView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        rate_check = RateLimitMixin()
-        allowed, reset_time, remaining = rate_check.check_rate_limit(request.user)
+        allowed, reset_time, remaining = _check_rate_limit(request.user)
         
         if not allowed:
             return Response({
@@ -40,38 +34,35 @@ class SubmitReviewView(APIView):
         
         serializer = ReviewCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        review = serializer.save(user=request.user)
-        
-        review.status = ReviewStatus.PROCESSING
-        review.save()
-        
-        try:
-            llm = LLMService()
-            result = llm.review_code(review.code, review.language)
-            
-            review.summary = result.get('summary', '')
-            review.score = result.get('score', 0)
-            review.raw_llm_response = result
-            
-            Bug.objects.filter(review=review).delete()
-            for bug_data in result.get('bugs', []):
-                Bug.objects.create(review=review, line=bug_data.get('line'), issue=bug_data.get('issue', ''), severity=bug_data.get('severity', 'low'))
-            
-            SecurityIssue.objects.filter(review=review).delete()
-            for sec_data in result.get('security', []):
-                SecurityIssue.objects.create(review=review, line=sec_data.get('line'), issue=sec_data.get('issue', ''), severity=sec_data.get('severity', 'medium'))
-            
-            QualitySuggestion.objects.filter(review=review).delete()
-            for qual_data in result.get('quality', []):
-                QualitySuggestion.objects.create(review=review, suggestion=qual_data.get('suggestion', ''), severity=qual_data.get('severity', 'low'))
-            
-            review.status = ReviewStatus.COMPLETED
-        except Exception as e:
-            review.status = ReviewStatus.FAILED
-        
-        review.save()
-        review.save()
-        
+
+        queue_state = {'error': None}
+
+        with transaction.atomic():
+            review = serializer.save(user=request.user, status=ReviewStatus.PENDING)
+            review_id = review.id
+
+            def enqueue():
+                try:
+                    async_result = process_review.delay(review_id)
+                except Exception as exc:
+                    queue_state['error'] = exc
+                    Review.objects.filter(pk=review_id).update(status=ReviewStatus.FAILED)
+                    return
+                Review.objects.filter(pk=review_id).update(celery_task_id=str(async_result.id))
+
+            transaction.on_commit(enqueue)
+
+        review.refresh_from_db()
+
+        if queue_state['error'] is not None:
+            response = Response({
+                'id': review.id,
+                'status': review.status,
+                'error': 'Failed to queue review for background processing',
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+            response['X-RateLimit-Remaining'] = remaining - 1
+            return response
+
         response = Response({
             'id': review.id,
             'status': review.status,
@@ -93,7 +84,7 @@ class ReviewDetailView(generics.RetrieveAPIView):
 class ReviewListView(generics.ListAPIView):
     serializer_class = ReviewListSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_fields = ['language', 'status']
     ordering_fields = ['created_at', 'score']
     ordering = ['-created_at']
@@ -119,12 +110,12 @@ class AdminStatsView(APIView):
         if not request.user.is_staff:
             return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
         
-        from django.db.models import Count, Avg
+        from datetime import datetime
+        from django.db.models import Avg, Count
         from django.utils import timezone
-        from datetime import timedelta
-        
+
         today = timezone.now().date()
-        today_start = timezone.make_aware(timezone.datetime.combine(today, timezone.datetime.min.time()))
+        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
         
         reviews_today = Review.objects.filter(created_at__gte=today_start).count()
         avg_score = Review.objects.filter(status=ReviewStatus.COMPLETED).aggregate(Avg('score'))['score__avg']
